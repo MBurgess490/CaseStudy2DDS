@@ -21,6 +21,10 @@ library(olsrr)
 library(MPV)
 library(cowplot)
 ```
+# Link to Youtube Presentation
+
+## https://youtu.be/MmvPaYlUu78 
+
 # Introduction and Executive Summary
 
 ### In this case study, I was asked by my client, DDSAnalytics, to explore factors leading to attrition. DDSAnalytics specializes in talent 
