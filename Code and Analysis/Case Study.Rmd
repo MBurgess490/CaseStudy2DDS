@@ -1,0 +1,350 @@
+---
+title: "Case Study 2"
+author: "Michael Burgess"
+date: "3/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=20, fig.height=6) 
+```
+
+```{r}
+library(tidyverse)
+library(e1071)
+library(caret)
+library(corrplot)
+library(class)
+library(vcd)
+library(olsrr)
+library(MPV)
+library(cowplot)
+```
+# Introduction and Executive Summary
+
+### In this case study, I was asked by my client, DDSAnalytics, to explore factors leading to attrition. DDSAnalytics specializes in talent 
+### management and is looking to leverage data science in this capacity. Their executive leadership would like to perform an analysis on existing 
+### data before green lighting a larger project. 
+
+### Using ROC analysis of Naive Bayes on a undersampling of the data, it was determined that the top 3 contributors to employee turnover were 
+### Overtime, Monthly Income, and Total Years Worked. Using these variables only, it was possible to determine whether an employee would 
+### experience attrition with an overall accuracy of approximately 71%. 
+
+### Further, I was also asked to identify the top 3 variables contributing to employees' monthly income. Using different automatic variable 
+### selection techniques on a linear regression model I determined that the top 3 variables were Job Level, Job Role, and Total Working Years. 
+### Using a linear model created with these variables I was able to predict the mean monthly income for an employee with an accuracy of plus or ### minus $986.70 and to account for approximately 95.4% of the variation in the means of monthly income.
+
+
+## Code and Analysis
+
+### First I imported the Employee Data. It does not contain any missing entries. I then dropped unnecessary columns:  the Employee ID numbers, 
+### Employee Count as that was  1 for all entries, Employee Number, Over 18 as all employees were over 18, and Standard Hours as all Standard 
+### Hours were 80. I then converted all columns of the character class to factors so that they could be treated as categorical variables. The data
+### consist of 870 rows in 36 columns.
+```{r}
+
+#Data Import
+EmpData <- read.csv(choose.files(), header = T, sep = ",")
+
+#Remove Employee ID Numbers, over 18 as all employees are over 18, and Standard hours as all standard hours are 80
+EmpData <- EmpData[,-c(1, 10, 11, 23, 28)]
+
+#Convert characters to factors
+EmpData[sapply(EmpData, is.character)] <- lapply(EmpData[sapply(EmpData, is.character)], 
+                                       as.factor)
+
+#Check for NAs
+map(EmpData, ~sum(is.na(.)))
+
+#Check number of levels for each factor
+str(EmpData)
+
+#convert more columns for int to factor
+EmpData$Education <- as.factor(EmpData$Education)
+EmpData$JobInvolvement <- as.factor(EmpData$JobInvolvement)
+EmpData$JobLevel <- as.factor(EmpData$JobLevel)
+EmpData$JobSatisfaction <- as.factor(EmpData$JobSatisfaction)
+EmpData$PerformanceRating <- as.factor(EmpData$PerformanceRating)
+EmpData$RelationshipSatisfaction <- as.factor(EmpData$RelationshipSatisfaction)
+EmpData$StockOptionLevel <- as.factor(EmpData$StockOptionLevel)
+EmpData$WorkLifeBalance <- as.factor(EmpData$WorkLifeBalance)
+```
+
+## Identifying Factors That Contribute to Attrition
+
+### One of the issues with this dataset is that it is very unbalanced. Only about 16% of the data contains a yes value attrition, so for any 
+### model it could identify everything as no attrition and still be approximately 84% - 85% accurate. To work around this I used a technique 
+### called under sampling. I first split the data set into the 140 rows containing yes for attrition and then a seperate dataframe contaning 
+### the no values. I then randomly sampled 140 of the no rows and combined them with the 140 yes rows. I then ran a Naive-Bayes classifier 
+### with Leave One Out Cross Validation on the combined dataframe and saved the top 3 variables that contributed to the attrition. I repeated this
+### process 100 times, saving the top 3 variables each time. Using this process Overtime, Monthly Income, and Total Years Worked were 
+### identified as the top 3 variables contributing to attrition. This makes sense as we would except employees that feel overworked or underpaid ### to have higher levels of attrition.    
+```{r}
+#split dataframe into separate frames for yes and no attrition
+AtrYes = EmpData %>% filter(Attrition == "Yes")
+AtrNo = EmpData %>% filter(Attrition == "No")
+
+Grid = data.frame(usekernel=TRUE,laplace = 1,adjust=1)
+
+#create dataframe to hold most important variables
+ImpName <- data.frame()
+
+#run naive bayes with loocv 100 times and select 3 most important variables using ROC
+#This testing uses under sampling in which 140 random no attrition values are selected to 
+#compare to the 140 yes attrition values in the original Employee Data
+for(i in 1:100){
+  AtrNoSample = sample_n(AtrNo, 140)
+  AtrDF <- data.frame()
+  AtrDF = rbind(AtrYes, AtrNoSample)
+  
+  mdl = train(Attrition ~ .,data=AtrDF,method="naive_bayes",
+              trControl=trainControl(method="LOOCV"),
+              tuneGrid=Grid)
+  
+  ImpMeasure<-data.frame(varImp(mdl)$importance)
+  ImpMeasure$Name<-row.names(ImpMeasure)
+  ImpMeasure <- ImpMeasure[order(-ImpMeasure$Yes),]
+  ImpMeasure <- ImpMeasure[1:3,] %>% select(Name)
+  rownames(ImpMeasure) <- NULL
+  ImpName <- rbind(ImpName, ImpMeasure)
+}
+```
+
+## Predicting Attrition with the Top 3 Influential Factors
+
+### After the top 3 variables were identified I created a data frame with the same information as the Employee Data, but with only those 
+### variables and whether or not they experienced attrition. I ran the undersampled Naive-Bayes test on the full Employee Data 100 times using 
+### different samples of no attrition employees and then averaged the accuracy, sensitivity, and specificity. I was able to achieve an average 
+### accuracy of 71%. No attrition was identified correctly an average 72% of the time and yes attrition was identifed correctly an 
+### average 64% of the time.
+
+```{r}
+#Create data frame with only the 3 most influential variables from EmpData: Overtime, Monthly Income, and Total Working Years
+AtrNB <- data.frame(MonthlyIncome = EmpData$MonthlyIncome, OverTime = EmpData$OverTime, 
+                    TotalWorkingYears= EmpData$TotalWorkingYears, Attrition = EmpData$Attrition)
+
+AtrYesNB = AtrNB %>% filter(Attrition == "Yes")
+AtrNoNB = AtrNB %>% filter(Attrition == "No")
+
+iterations = 100
+
+masterAcc = matrix(nrow = iterations)
+masterSen = matrix(nrow = iterations)
+masterSpe = matrix(nrow = iterations)
+
+for(j in 1:iterations)
+{
+  AtrNoSampleNB = sample_n(AtrNoNB, 140)
+  AtrDFNB <- data.frame()
+  AtrDFNB = rbind(AtrYesNB, AtrNoSampleNB)
+  mdlNB = train(Attrition~., data = AtrDFNB, "naive_bayes", trControl=trainControl(method="LOOCV"), tuneGrid = Grid)
+  predict = predict(mdlNB, newdata = EmpData)
+  CM = confusionMatrix(predict, EmpData$Attrition)
+  masterAcc[j] = CM$overall[1]
+  masterSen[j] = CM$byClass[1]
+  masterSpe[j] = CM$byClass[2]
+}
+
+MeanAcc = colMeans(masterAcc)
+
+masterSen[is.na(masterSen)] = 0 
+MeanSen = colMeans(masterSen)
+
+masterSpe[is.na(masterSpe)] = 0
+MeanSpe = colMeans(masterSpe)
+
+MeanAcc
+MeanSen
+MeanSpe
+```
+## Predictions for Dataset with no Attrition
+
+### I was also provided a dataset with no attrition information and requested to predcit whether or not those employees experienced attrition. 
+### I used a similar undersampled model and saved the predictions to a csv file.
+```{r}
+#import the competition data set that has no attrition labels
+compData <- read.csv(choose.files(), header = T, sep = ",")
+compData[sapply(compData, is.character)] <- lapply(compData[sapply(compData, is.character)], 
+                                       as.factor)
+
+#run naive-bayes model again and confirm accuracy
+AtrNB <- data.frame(MonthlyIncome = EmpData$MonthlyIncome, OverTime = EmpData$OverTime, 
+                    TotalWorkingYears= EmpData$TotalWorkingYears, Attrition = EmpData$Attrition)
+
+AtrYesNB = AtrNB %>% filter(Attrition == "Yes")
+AtrNoNB = AtrNB %>% filter(Attrition == "No")
+
+AtrNoSampleNB = sample_n(AtrNoNB, 140)
+AtrDFNB <- data.frame()
+AtrDFNB = rbind(AtrYesNB, AtrNoSampleNB)
+mdlNB = train(Attrition~., data = AtrDFNB, "naive_bayes", trControl=trainControl(method="LOOCV"), tuneGrid = Grid)
+
+predict = predict(mdlNB, newdata = EmpData)
+CM = confusionMatrix(predict, EmpData$Attrition)
+
+
+#run predictions for attrition labels for competition set
+predictComp = predict(mdlNB, newdata = compData)
+finalCompDF <- data.frame(ID = compData$ID, Attrition = predictComp)
+
+#save the competition predictions to a csv
+write.csv(finalCompDF, file = choose.files())
+```
+
+## Other Insights
+
+### Because Overtime, Monthly Income, and Total Years worked were the 3 most influential variables for employee attrition, I wanted to look deeper
+### at these variables. First I looked at attrition by job role and found that Sales Representatives has an attrition rate of over 45%. Looking at
+### the overtime and monthly income for Sales Representatives I found that over 33% of Sales Representatives had worked overtime and that only 1 
+### sales representative had a monthly income of over $5,000.00.  Human Resources experienced the next highest attrition at 22.22%, but had the ### 3rd lowest overtime rate at 22.22%. However, we again see that the majority of Human Resources monthly incomes was below $5,000.00.  
+### Comparatively, Research Directors had the lowest attrition at only 1.96% but the third highest Overtime rate of 31.37% However, Research 
+### Directors also had some of the highest total working years and monthly incomes with only a few employees having less than 10 years of 
+### experience and all monthly income rates above $10,000.Interestingly attrition was the highest for employees with less than 10 total working ### years of experience with the highest rates between 0 to 5 years. There were fewer employees experiencing attrition between 10 to 20 years and ### almost none above 20. We also see that the majority of employees with attrition made a monthly income fewer than $5,000. 
+```{r}
+#create table of attrition by job role
+tab <- table(EmpData$JobRole, EmpData$Attrition)
+tab <- cbind(tab, Total = rowSums(tab))
+
+#convert to data frame and add percentage of how many employees were yes or no attrition by job role
+JobAtrDF <- as.data.frame.matrix(tab)
+JobAtrDF$Percent_No <- round((JobAtrDF$No/JobAtrDF$Total)*100, 2)
+JobAtrDF$Percent_Yes <- round((JobAtrDF$Yes/JobAtrDF$Total)*100, 2)
+JobAtrDF <- JobAtrDF[order(-JobAtrDF$Percent_Yes),]
+
+#table of overtime by job role 
+tab2 <- table(EmpData$JobRole, EmpData$OverTime)
+tab2 <- cbind(tab2, Total = rowSums(tab2))
+
+#convert to dataframe and add percentage of how many employees were yes or no overtime by job role
+JobOvrDF <- as.data.frame.matrix(tab2)
+JobOvrDF$Percent_No <- round((JobOvrDF$No/JobOvrDF$Total)*100, 2)
+JobOvrDF$Percent_Yes <- round((JobOvrDF$Yes/JobOvrDF$Total)*100, 2)
+JobOvrDF <- JobOvrDF[order(-JobOvrDF$Percent_Yes),]
+
+#Monthly income by job role histogram
+EmpData %>% ggplot(aes(x = MonthlyIncome, fill = JobRole)) + geom_histogram(show.legend = FALSE) + facet_wrap(~JobRole) +
+    labs(title = "Distribution of Monthly Income  By Job Role", x = "Monthly Income", y = "Count")
+
+#Monthly income by job role boxplot
+EmpData %>% ggplot(aes(y = MonthlyIncome, color = JobRole)) + geom_boxplot(show.legend = FALSE) + facet_wrap(~JobRole) +
+  labs(title = "Distribution of Monthly Income by Job Role", y = "Monthly Income") +
+  theme(axis.title.x=element_blank(),axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+#total working years by job role histogram
+EmpData %>% ggplot(aes(x = TotalWorkingYears, fill = JobRole)) + geom_histogram(show.legend = FALSE) + facet_wrap(~JobRole) +
+  labs(title = "Distribution of Total Working Years by Job Role", x = "Total Working Years", y = "Count")
+
+#total working years by job role boxpot
+EmpData %>% ggplot(aes(y = TotalWorkingYears, color = JobRole)) + geom_boxplot(show.legend = FALSE) + facet_wrap(~JobRole) +
+  labs(title = "Distribution of Total Working Years by Job Role", y = "Total Working Years") +
+  theme(axis.title.x=element_blank(),axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+#attrition by total working years
+EmpData %>% ggplot(aes(x = TotalWorkingYears, fill = Attrition)) + geom_histogram(show.legend = FALSE) + facet_wrap(~Attrition) +
+  labs(title = "Distribution of Total Working Years by Attrition", x = "Total Working Years", y = "Count")
+
+#attrition by monthly income
+EmpData %>% ggplot(aes(x = MonthlyIncome, fill = Attrition)) + geom_histogram(show.legend = FALSE) + facet_wrap(~Attrition) +
+  labs(title = "Distribution of Monthly Incomes by Attrition", x = "Monthly Income", y = "Count")
+```
+## Predict Monthly Income
+
+### I used 3 different selection models to find the top 3 most influential variables for predicting monthly income. Job Level, Job Role, and Total
+### Working Years were identified to be the most influental variables. I then created a linear regression model to predict monthly income using 
+### those variables and allowing both the slope and the intercepts to vary for each variable and category. This resulted in a model with an RMSE ### of 996.60. This equates to an error rate of plus or minus $986.70 for predictions of monthly income. Further the model had an adjusted 
+### R-square value of 0.953 meaning that the predictor variables accounted for 95.4% of the variability in the predicted mean monthly income.     
+```{r}
+#Create model contaning all variables to predict monthly income
+IncomeMdl <- lm(MonthlyIncome ~ ., data = EmpData)
+
+#create dataframe and model containing variables selected by Forward Selection
+SelectForward <- ols_step_forward_p(IncomeMdl, peneter = 0.05, details = FALSE)
+VarFoward <- SelectForward$predictors
+ForwardDF <- EmpData %>% select(VarFoward, MonthlyIncome)
+MdlFrwrd <- lm(MonthlyIncome ~ . , data = ForwardDF)
+
+summary(MdlFrwrd)
+
+#create dataframe and model containing variables selected by Backward Selection
+SelectBackward <- ols_step_backward_p(IncomeMdl, peneter = 0.05, details = FALSE)
+MdlBackward <- lm(MonthlyIncome ~ JobLevel + JobRole + TotalWorkingYears + BusinessTravel + Gender +
+                    DailyRate + MonthlyRate + YearsWithCurrManager + YearsSinceLastPromotion +
+                    DistanceFromHome + PerformanceRating + PercentSalaryHike + Department, data = EmpData)
+
+summary(MdlBackward)
+
+#create dataframe and model containing varaibles selected by Stepwise Selection
+SelectStep <- ols_step_both_p(IncomeMdl, peneter = 0.05, details = FALSE)
+
+VarStep <- SelectStep$predictors
+StepDF <- EmpData %>% select(VarStep, MonthlyIncome)
+MdlStep <- lm(MonthlyIncome ~ . , data = StepDF)
+
+summary(MdlStep)
+
+#All three models agree on job level, job role, and total working years as most significant
+#Create model using these 3 variables
+
+LmModel <- lm(MonthlyIncome ~ JobLevel + JobRole + TotalWorkingYears, data = EmpData)
+summary(LmModel)
+
+LmModel2 <- lm(MonthlyIncome ~ JobLevel * JobRole * TotalWorkingYears, data = EmpData)
+summary(LmModel2)
+
+par(mfrow = c(2,2))
+plot(LmModel2, main = "Assumption Tests for Income Model")
+par(mfrow = c(1,1))
+
+
+#graphics for income and 3 variables
+
+#income by total working years
+IncomeByYears <- EmpData %>% ggplot(aes(x=TotalWorkingYears, y= MonthlyIncome)) + geom_point() + geom_smooth(method="lm") +
+  labs(title = "Monthly Income by Total Working Years", x = "Total Working Years", y = "Monthly Income")
+
+#distribution of job levels by job role
+JobLevelRole <- EmpData %>% ggplot(aes(x=JobLevel, fill = JobRole)) + geom_bar(show.legend = FALSE) + facet_wrap(~JobRole) +
+  labs(title = "Number of Employees in Each Job Level for Each Job Role", x = "Job Level", y = "Number of Employees")
+
+#histogram and box plot for Monthly Income by Job Role
+IncomeJobRoleHist <- EmpData %>% ggplot(aes(x=MonthlyIncome, fill = JobRole)) + geom_histogram(show.legend = FALSE) + facet_wrap(~JobRole) + 
+  labs(title = "Distribution of Monthly Income by Job Role", x = "Monthly Income", y = "Count")
+
+IncomeJobRoleBox <- EmpData %>% ggplot(aes(y=MonthlyIncome, color = JobRole)) + geom_boxplot(show.legend = FALSE) + facet_wrap(~JobRole) +
+  labs(title = "Distribution of Monthly Income by Job Role", y = "Monthly Income") +
+  theme(axis.title.x=element_blank(),axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+#histogram and box plot for Monthly Income by Job Level
+IncomeJobLevelHist <- EmpData %>% ggplot(aes(x=MonthlyIncome, fill = JobLevel)) + geom_histogram(show.legend = FALSE) + facet_wrap(~JobLevel) +
+  labs(titles = "Distribution of Monthly Income by Job Level", x = "Monthly Income", y = "Count")
+  
+
+IncomeJobLevelBox <- EmpData %>% ggplot(aes(y=MonthlyIncome, color = JobLevel)) + geom_boxplot(show.legend = FALSE) + facet_wrap(~JobLevel) +
+  labs(titles = "Distribution of Monthly Income by Job Level", y = "Monthly Income") +
+  theme(axis.title.x=element_blank(),axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+plot_grid(JobLevelRole, IncomeByYears, IncomeJobRoleHist, IncomeJobRoleBox, IncomeJobLevelHist, IncomeJobLevelBox, labels = "AUTO")
+
+
+```
+## Predictions for Dataset with no Monthly Income
+
+### I was also provided a dataset with no Monthly Income information and asked to predcit those monthly income values for each employee in the 
+### set. I used the Monthly Income model and saved the predictions to a csv file.
+```{r}
+#import the competition data set that has no income values
+compIncomeData <- read.csv(choose.files(), header = T, sep = ",")
+compIncomeData[sapply(compIncomeData, is.character)] <- lapply(compIncomeData[sapply(compIncomeData, is.character)], 
+                                       as.factor)
+
+
+compIncomeData$JobLevel <- as.factor(compIncomeData$JobLevel)
+
+#run predictions for income for competition set
+predictIncome = predict(LmModel2, newdata = compIncomeData)
+finalCompIncome <- data.frame(ID = compIncomeData$ID, MonthlyIncome = predictIncome)
+
+#save the competition predictions to a csv
+write.csv(finalCompIncome, file = choose.files())
+```
